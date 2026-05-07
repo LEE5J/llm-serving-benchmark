@@ -1,0 +1,3 @@
+{"id":"hello","messages":[{"role":"user","content":"Say hello in one short sentence."}]}
+{"id":"summary","messages":[{"role":"user","content":"Summarize why latency matters for LLM serving in three bullet points."}]}
+{"id":"code","messages":[{"role":"user","content":"Write a small Python function that returns the Fibonacci sequence up to n."}]}

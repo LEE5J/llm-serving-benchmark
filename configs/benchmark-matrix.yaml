@@ -1,0 +1,16 @@
+models:
+  - name: qwen2.5-7b-instruct
+    hf: Qwen/Qwen2.5-7B-Instruct
+
+frameworks:
+  - sglang
+  - vllm
+  - llama_cpp
+
+prompt_sets:
+  - prompts/smoke.jsonl
+
+concurrency: [1, 2, 4, 8, 16, 32]
+max_tokens: [128, 256, 512]
+warmup: 10
+requests: 100
