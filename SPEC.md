@@ -1,6 +1,6 @@
 # LLM Serving Benchmark SPEC
 
-> Status: draft
+> Status: architecture draft
 >
 > Primary objective: define an implementation-grade specification before coding.
 >
@@ -394,20 +394,20 @@ Required fields:
 
 Failures must be categorized.
 
-Required categories:
+Required machine-readable categories:
 
-- HTTP error
-- timeout
-- connection error
-- server crash
-- OOM
-- scheduler rejection
-- context length exceeded
-- invalid JSON response
-- empty output
-- truncated output
-- tokenizer or template error
-- unknown error
+- `http_error`
+- `timeout`
+- `connection_error`
+- `server_crash`
+- `oom`
+- `scheduler_rejection`
+- `context_length_exceeded`
+- `invalid_json_response`
+- `empty_output`
+- `truncated_output`
+- `tokenizer_or_template_error`
+- `unknown_error`
 
 Required fields:
 
@@ -834,10 +834,15 @@ Every run must store at least:
 
 The codebase should be implemented as small, testable modules.
 
-Recommended package structure:
+This section is a coding-agent contract. Agents must implement the module
+boundaries below unless a later SPEC revision explicitly changes them. Design
+rationale belongs in `architect.md`; this file describes the required behavior.
+
+### 13.1 Target package structure
 
 ```text
 benchmark/
+  __init__.py
   cli.py
   config.py
   openai_client.py
@@ -845,6 +850,7 @@ benchmark/
   metrics.py
   resources.py
   reporting.py
+  schemas.py
   datasets/
     mmlu.py
     gsm8k.py
@@ -856,7 +862,6 @@ benchmark/
     numeric.py
     instruction_rules.py
     code_tests.py
-  schemas.py
 servers/
   sglang.sh
   vllm.sh
@@ -870,7 +875,346 @@ reports/
 tests/
 ```
 
-The first coding agent may refactor the current minimal scaffold toward this structure.
+The current `benchmark/bench_openai.py` may remain as a backward-compatible
+entrypoint, but new behavior must live in the smaller modules above.
+
+### 13.2 Stable module responsibilities
+
+#### `benchmark.schemas`
+
+Purpose:
+
+- Define serializable data structures shared by all other modules.
+- Make raw JSONL and summary schema changes explicit and testable.
+
+Must expose:
+
+- `RequestResult`
+- `RunMetadata`
+- `SLOConfig`
+- `SummaryRow`
+- schema validation helpers or dataclass conversion helpers
+
+Rules:
+
+- Objects must be JSON serializable after conversion to dictionaries.
+- Time fields in raw artifacts must use milliseconds for durations and Unix
+  epoch seconds for absolute timestamps.
+- Optional unavailable values must be represented as `null` in JSON, not omitted,
+  unless the field is explicitly future-extension metadata.
+- Failure categories must use the exact strings listed in Section 6.8.
+- Schema tests must fail when required fields are missing.
+
+#### `benchmark.metrics`
+
+Purpose:
+
+- Compute deterministic metrics from `RequestResult` objects.
+- Contain no network, file, CLI, or framework-specific code.
+
+Must expose:
+
+- percentile calculation for p50, p90, p95, p99
+- TTFT, TPOT, latency statistic aggregation
+- throughput calculation
+- goodput calculation from `SLOConfig`
+- failure count aggregation
+
+Rules:
+
+- Empty input must return `None` or zero according to field semantics and must
+  not raise.
+- Percentiles must be deterministic and documented in tests.
+- TPOT formula is:
+
+```text
+tpot_ms = (latency_ms - ttft_ms) / max(output_tokens - 1, 1)
+```
+
+- Goodput must count only requests that are successful, non-empty, not
+  unexpectedly truncated, and satisfy all configured SLO fields.
+
+#### `benchmark.openai_client`
+
+Purpose:
+
+- Send one OpenAI-compatible streaming request and return one `RequestResult`.
+- Hide HTTP streaming details from workload runners.
+
+Must support initially:
+
+- `POST /chat/completions`
+- streaming responses using Server-Sent Events style `data:` lines
+- `model`, `messages`, `max_tokens`, `temperature`, optional stop sequences,
+  and prompt-level `extra` payload overrides
+
+Rules:
+
+- TTFT is measured from immediately before the HTTP request is sent to the first
+  streamed output content token observed by the client.
+- End-to-end latency is measured from immediately before request send to full
+  stream completion or failure.
+- HTTP status >= 400 must be categorized as `http_error`.
+- Timeout, connection failure, invalid JSON, empty output, and unknown errors
+  must be separately categorized.
+- The module must not implement concurrency scheduling.
+- The module must not write files.
+
+#### `benchmark.workloads`
+
+Purpose:
+
+- Implement request scheduling and prompt selection.
+
+Must support initially:
+
+- closed-loop mode
+- concurrency values 1, 10, and 100
+- warmup exclusion from measured results
+- measured request count limits
+- deterministic prompt cycling by default
+
+Rules:
+
+- Closed-loop means there are at most `concurrency` in-flight measured requests.
+- Each worker sends the next request immediately after its previous request
+  finishes until the measured request target is reached.
+- Warmup requests must use the same client path as measured requests but must not
+  be included in raw JSONL or summaries.
+- Measured request IDs must be unique and stable within a run.
+- Workload labels must be:
+  - `single_user` for concurrency 1
+  - `concurrency_10` for concurrency 10
+  - `concurrency_100` for concurrency 100
+
+#### `benchmark.config`
+
+Purpose:
+
+- Parse and normalize CLI/config-file inputs into explicit runtime config
+  objects.
+
+Must support initially:
+
+- CLI-only configuration
+- prompt JSONL path
+- output artifact paths
+- concurrency list
+- request count
+- warmup count
+- decoding parameters
+- SLO thresholds
+- framework/model metadata fields
+
+Rules:
+
+- Defaults must be visible in `--help`.
+- Invalid concurrency values must fail before network requests start.
+- Unknown benchmark semantics must not be silently inferred.
+
+#### `benchmark.reporting`
+
+Purpose:
+
+- Write raw JSONL, summary CSV, and summary JSON.
+
+Rules:
+
+- Raw JSONL must contain one line per measured request.
+- Summary CSV and summary JSON must contain equivalent metric values.
+- Writers must create parent directories when needed.
+- Writers must not drop raw failure records.
+- Raw model output may be stored inline for small smoke runs or by path for large
+  runs. The chosen mode must be represented by `raw_output_inline` or
+  `raw_output_path`.
+
+#### `benchmark.resources`
+
+Purpose:
+
+- Provide resource polling interfaces without coupling benchmark correctness to
+  a specific hardware tool.
+
+Must support initially:
+
+- a no-op collector
+- an optional NVIDIA `nvidia-smi` polling collector if available
+
+Rules:
+
+- Missing resource tools must not fail the benchmark run.
+- Resource fields unavailable on the current machine must be `null`.
+- Resource collection must not change request scheduling semantics.
+
+#### `benchmark.cli`
+
+Purpose:
+
+- Provide the user-facing command-line interface and wire modules together.
+
+Rules:
+
+- CLI must orchestrate config parsing, prompt loading, workload execution,
+  metrics aggregation, and reporting.
+- CLI must not contain metric math beyond formatting.
+- CLI must not contain HTTP streaming logic.
+- Existing `llm-bench` behavior must remain available.
+
+### 13.3 Prompt input contract
+
+Prompt files are JSONL. Each non-empty line must be one JSON object.
+
+Accepted fields:
+
+- `id`: optional stable prompt id. If omitted, use `prompt-{line_index}`.
+- `prompt`: optional plain user prompt.
+- `messages`: optional OpenAI chat messages.
+- `length_profile`: optional one of `SS`, `SL`, `LS`, `LL`, `MIXED`, or `unknown`.
+- `expected_output_tokens`: optional integer used for metadata only.
+- `extra`: optional object merged into the OpenAI-compatible request payload.
+
+Rules:
+
+- Each row must contain either `messages` or `prompt`.
+- If only `prompt` is present, convert it to one user message.
+- Prompt loading must be deterministic.
+- Invalid JSONL rows must fail with a clear error before benchmark requests start.
+
+### 13.4 Raw result schema contract
+
+Every measured request raw JSON object must include these fields:
+
+- `run_id`
+- `request_id`
+- `framework`
+- `model`
+- `workload_type`
+- `concurrency`
+- `length_profile`
+- `prompt_id`
+- `input_tokens`
+- `output_tokens`
+- `request_start_time`
+- `first_token_time`
+- `request_end_time`
+- `ttft_ms`
+- `tpot_ms`
+- `latency_ms`
+- `ok`
+- `error_type`
+- `error_message`
+- `stop_reason`
+- `raw_output_path`
+- `raw_output_inline`
+
+Additional fields are allowed only when they do not change the meaning of the
+required fields.
+
+### 13.5 Summary schema contract
+
+Each summary row/object must include:
+
+- run metadata identifiers: `run_id`, `framework`, `model`, `workload_type`,
+  `concurrency`, `length_profile`
+- counts: `total_requests`, `successful_requests`, `failed_requests`
+- throughput: `request_throughput_req_s`, `output_token_throughput_tok_s`,
+  `total_token_throughput_tok_s`
+- latency: `latency_mean_ms`, `latency_p50_ms`, `latency_p90_ms`,
+  `latency_p95_ms`, `latency_p99_ms`, `latency_max_ms`
+- TTFT: `ttft_mean_ms`, `ttft_p50_ms`, `ttft_p90_ms`, `ttft_p95_ms`,
+  `ttft_p99_ms`, `ttft_max_ms`
+- TPOT: `tpot_mean_ms`, `tpot_p50_ms`, `tpot_p90_ms`, `tpot_p95_ms`,
+  `tpot_p99_ms`
+- goodput: `slo_name`, `good_requests`, `request_goodput_req_s`,
+  `good_output_tokens`, `token_goodput_tok_s`, `goodput_ratio`
+- failures: `failure_rate`, `failure_counts_by_type`
+- resource fields defined in Section 7, using `null` when unavailable
+
+### 13.6 Feature branch ownership boundaries
+
+Coding agents should work on one feature branch per functional slice. Each slice
+must include tests for the behavior it introduces.
+
+Recommended branch sequence:
+
+1. `docs/spec-phase1-architecture`
+   - Documentation only.
+   - Files: `SPEC.md`, `architect.md`, planning docs.
+
+2. `feat/phase1-schemas`
+   - Files: `benchmark/schemas.py`, `tests/test_schemas.py`.
+   - No HTTP, CLI, or file writing code.
+
+3. `feat/phase1-metrics`
+   - Files: `benchmark/metrics.py`, `tests/test_metrics.py`.
+   - May import schemas.
+
+4. `feat/phase1-reporting`
+   - Files: `benchmark/reporting.py`, `tests/test_reporting.py`.
+   - May import schemas and metrics.
+
+5. `feat/phase1-openai-client`
+   - Files: `benchmark/openai_client.py`, `tests/test_openai_client.py`.
+   - May import schemas and metrics only for result construction.
+
+6. `feat/phase1-workloads`
+   - Files: `benchmark/workloads.py`, `tests/test_workloads.py`.
+   - May import schemas and openai client interfaces.
+
+7. `feat/phase1-cli-config`
+   - Files: `benchmark/config.py`, `benchmark/cli.py`,
+     `benchmark/bench_openai.py`, `pyproject.toml`, CLI tests.
+   - Wires previously merged modules together.
+
+8. `feat/phase1-resources`
+   - Files: `benchmark/resources.py`, resource tests.
+   - May be merged before or after CLI if no CLI contract is changed.
+
+Agents must avoid modifying files outside their assigned slice unless the SPEC
+or reviewer explicitly expands the task.
+
+### 13.7 Test strategy by feature
+
+Minimum test expectations:
+
+- Schema tests verify required fields, JSON serialization, default/null behavior,
+  and failure category validation.
+- Metric tests verify percentile behavior, TPOT formula, empty input behavior,
+  throughput, goodput, and failure aggregation.
+- Reporting tests write to a temporary directory and verify JSONL, CSV, and JSON
+  contain equivalent summary values.
+- OpenAI client tests use mocked streaming responses where practical; live
+  network tests must not be required for unit test success.
+- Workload tests use a fake async request function and verify closed-loop
+  concurrency, warmup exclusion, unique request IDs, and prompt cycling.
+- CLI/config tests verify argument parsing and invalid input handling without
+  requiring a live server.
+
+Required verification for every implementation branch:
+
+```bash
+python3 -m compileall benchmark
+pytest -q
+```
+
+If package metadata changes:
+
+```bash
+python3 -m venv /tmp/llm-bench-venv
+. /tmp/llm-bench-venv/bin/activate
+pip install -e .
+python -m compileall benchmark
+```
+
+### 13.8 Backward compatibility
+
+Until a major version bump:
+
+- `llm-bench` must remain a valid console command.
+- `python -m benchmark.bench_openai --help` should work.
+- Existing smoke prompt files must remain accepted.
+- Existing raw output and summary output paths may change only if the old flags
+  remain as aliases.
 
 ## 14. Implementation Phases
 
@@ -986,14 +1330,34 @@ Each coding-agent task must include:
 - expected commands to run
 - commit message format
 
-## 16. Acceptance Criteria for First Useful Version
+## 16. Acceptance Criteria
+
+### 16.1 Phase 1 acceptance criteria
+
+Phase 1 is complete when all of the following are true:
+
+- Performance harness can run against any OpenAI-compatible `/chat/completions`
+  endpoint.
+- It supports closed-loop concurrency 1, 10, and 100.
+- It excludes warmup requests from measured artifacts.
+- It records TTFT, TPOT, latency percentiles, throughput, goodput, and
+  categorized failures.
+- It produces raw JSONL, summary CSV, and summary JSON.
+- It can run `prompts/smoke.jsonl`.
+- It has unit tests for schema behavior, metric calculations, reporting, and
+  closed-loop scheduling.
+- `llm-bench --help` works after installation.
+- `python3 -m compileall benchmark` passes.
+- `pytest -q` passes when tests exist.
+
+Phase 1 must not implement P0 quality benchmarks except for interfaces that do
+not change performance benchmark semantics.
+
+### 16.2 First combined performance and quality version
 
 The first useful version is complete when all of the following are true:
 
-- Performance harness can run against any OpenAI-compatible endpoint.
-- It supports concurrency 1, 10, and 100.
-- It records TTFT, TPOT, latency percentiles, throughput, goodput, and failures.
-- It produces raw JSONL and summary CSV/JSON.
+- Phase 1 acceptance criteria are met.
 - It can run at least one smoke prompt file.
 - It includes at least two P0 quality benchmark runners.
 - It includes a synthetic long-context retrieval benchmark.

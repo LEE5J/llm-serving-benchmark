@@ -1,229 +1,33 @@
 # LLM Serving Benchmark
 
-LLM Serving Benchmark는 vLLM, SGLang, llama.cpp 같은 LLM 서빙 프레임워크를 객관적으로 비교하기 위한 벤치마크 프로젝트입니다.
+LLM Serving Benchmark는 vLLM, SGLang, llama.cpp 같은 LLM 서빙 프레임워크를 같은 조건에서 비교하기 위한 벤치마크 도구입니다.
 
-이 프로젝트의 목적은 특정 프레임워크에 유리한 단일 조건을 만드는 것이 아닙니다. 동일한 모델과 환경을 가능한 한 일원화하되, 단일 조건이 만드는 편향을 줄이기 위해 다양한 부하 유형, 입력/출력 길이, 성능 지표, 품질 벤치마크를 함께 측정하는 것을 목표로 합니다.
+이 프로젝트의 목적은 특정 프레임워크가 좋아 보이는 단일 숫자를 만드는 것이 아닙니다. 같은 모델, 같은 요청 형식, 같은 측정 기준을 사용하면서도 실제 서비스에서 문제가 되는 지점을 함께 확인하는 것이 목적입니다.
 
-## 핵심 방향
+- 첫 토큰이 얼마나 빨리 나오는가
+- 동시 요청이 늘어날 때 p95/p99 latency가 어떻게 변하는가
+- throughput이 높아도 SLO를 만족하는 goodput은 충분한가
+- timeout, OOM, server crash, invalid response가 얼마나 발생하는가
+- prompt 길이와 생성 길이가 달라져도 결과가 일관적인가
+- quantization, tokenizer, chat template, stop sequence 차이로 품질이 흔들리지 않는가
 
-서빙 프레임워크 평가는 throughput 하나로 끝나지 않습니다.
+## 왜 만들었나
 
-높은 token/sec를 기록하더라도 다음 문제가 있으면 실제 서비스에서는 좋은 선택이 아닐 수 있습니다.
+LLM serving 성능은 하나의 `tokens/sec` 값으로 설명되지 않습니다.
 
-- 첫 토큰이 너무 늦게 나온다.
-- p95/p99 latency가 나쁘다.
-- 동시성이 올라가면 timeout이나 OOM이 발생한다.
-- 특정 길이의 prompt에서만 성능이 좋다.
-- quantization이나 batching 때문에 공개 벤치마크 정확도가 떨어진다.
-- chat template, tokenizer, stop sequence 차이로 응답 품질이 달라진다.
+예를 들어 어떤 프레임워크는 높은 동시성에서 output token throughput은 좋지만 첫 토큰이 늦을 수 있습니다. 어떤 설정은 짧은 prompt에서는 빠르지만 긴 context에서는 KV cache 압박이나 queueing 때문에 tail latency가 급격히 나빠질 수 있습니다. quantization이나 framework-specific optimization은 성능을 높이는 대신 품질 회귀를 만들 수도 있습니다.
 
-따라서 이 프로젝트는 성능과 품질을 함께 봅니다.
+이 프로젝트는 이런 차이를 숨기지 않고 기록합니다. 결과에는 raw per-request artifact, summary metric, 환경 metadata, 재현 명령을 남겨 나중에 같은 조건으로 다시 확인할 수 있게 합니다.
 
-## SPEC 우선 원칙
+## 현재 상태
 
-코드 작성 전에 `SPEC.md`를 먼저 작성하고, 이 문서를 구현의 기준으로 삼습니다.
+현재 리포지토리는 초기 scaffold 단계입니다.
 
-중요 원칙:
+구현 계약은 `SPEC.md`에 정의되어 있으며, 설계 의도와 모듈 분리 근거는 `architect.md`에 정리되어 있습니다. README는 사용자 관점에서 목적과 실행 방법만 설명합니다.
 
-- `SPEC.md`가 source of truth입니다.
-- Hermes Agent는 기획, 문서화, 오케스트레이션, 리뷰를 담당합니다.
-- 실제 주요 코딩은 Codex CLI, Claude Code 같은 코딩 전문 에이전트에게 위임합니다.
-- 어떤 코딩 에이전트가 구현하더라도 비슷한 결과물이 나오도록 SPEC을 최대한 구체적으로 유지합니다.
+현재 제공되는 코드는 OpenAI-compatible `/chat/completions` 서버에 요청을 보내는 초기 벤치마크 harness입니다. `SPEC.md`의 모든 요구사항이 아직 구현된 상태는 아닙니다.
 
-자세한 구현 기준은 `SPEC.md`를 보세요.
-
-## 1차 벤치마크 유형
-
-초기 벤치마크는 세 가지 부하 유형을 필수로 지원하는 것을 목표로 합니다.
-
-### 1. 단일 배치 / 단일 사용자
-
-- concurrency: 1
-- 목적: 기본 응답성, framework overhead, TTFT 확인
-- 주요 지표:
-  - TTFT
-  - TPOT
-  - end-to-end latency
-  - output tokens/sec
-  - failure rate
-
-### 2. 동시 사용량 10
-
-- concurrency: 10
-- 목적: 소규모 서비스 또는 내부 API 수준의 부하 확인
-- 주요 지표:
-  - throughput
-  - latency p50/p90/p95/p99
-  - TTFT p50/p90/p95/p99
-  - goodput
-  - failure rate
-  - GPU/CPU 사용량
-
-### 3. 동시 사용량 100
-
-- concurrency: 100
-- 목적: 고부하 상황에서 scheduler, batching, KV cache, queueing, tail latency 확인
-- 주요 지표:
-  - raw throughput
-  - goodput
-  - p99 latency
-  - p99 TTFT
-  - timeout/OOM/server crash 여부
-  - GPU memory peak
-  - cost-like metrics
-
-## 성능 지표
-
-최소한 다음 지표를 수집합니다.
-
-- request throughput, req/s
-- output token throughput, tokens/s
-- total token throughput, input + output tokens/s
-- TTFT, Time To First Token
-- TPOT, Time Per Output Token
-- end-to-end latency
-- p50 / p90 / p95 / p99 latency
-- goodput under SLO
-- failure rate
-- timeout rate
-- GPU utilization
-- GPU memory usage
-- CPU utilization
-- tokens/sec/GPU
-- good tokens/sec/GPU
-- estimated cost per 1M output tokens, optional
-
-## 입력/출력 길이 프로파일
-
-서빙 성능은 prompt 길이와 생성 길이에 크게 의존합니다.
-
-초기 SPEC은 다음 프로파일을 정의합니다.
-
-- SS: short input / short output
-- SL: short input / long output
-- LS: long input / short output
-- LL: long input / long output
-- MIXED: 실제 서비스 traffic에 가까운 혼합 profile
-
-## 품질 벤치마크
-
-성능만 측정하지 않습니다. 공개 데이터셋 기반으로 출력 품질 또는 correctness regression도 측정합니다.
-
-초기 P0 후보:
-
-- MMLU subset
-  - 일반 지식 및 객관식 추론
-  - exact match scoring
-
-- GSM8K subset
-  - 수학 word problem reasoning
-  - final numeric answer exact match
-
-- IFEval subset
-  - instruction following
-  - rule-based scoring
-
-- Synthetic long-context retrieval
-  - 긴 context에서 needle/key retrieval 성공 여부
-  - exact match scoring
-
-- KMMLU subset, 한국어 평가가 필요할 경우
-  - 한국어 multiple-choice benchmark
-
-다음 단계 후보:
-
-- HumanEval pass@1
-- MBPP
-- TruthfulQA multiple-choice
-- KLUE / KoBEST / KorQuAD
-- RULER / LongBench / L-Eval
-- MT-Bench / AlpacaEval류 judge-based benchmark
-
-Judge 기반 평가는 비용과 비결정성 때문에 초기 hard gate가 아니라 nightly 또는 release report 용도로 분리합니다.
-
-## 비교 대상 프레임워크
-
-초기 대상:
-
-- SGLang
-- vLLM
-- llama.cpp / llama-server
-
-추가 후보:
-
-- TensorRT-LLM
-- Hugging Face TGI
-- LMDeploy
-- Ollama
-- 기타 OpenAI-compatible server
-
-## 현재 리포지토리 구조
-
-```text
-benchmark/
-  bench_openai.py        # 초기 OpenAI-compatible benchmark client scaffold
-configs/
-  benchmark-matrix.yaml  # 초기 benchmark matrix draft
-prompts/
-  smoke.jsonl            # smoke prompt set
-reports/
-  report-template.md     # report template
-servers/
-  sglang.sh              # SGLang launch template
-  vllm.sh                # vLLM launch template
-  llama_cpp.sh           # llama.cpp launch template
-SPEC.md                  # implementation-grade specification
-README.md
-```
-
-향후 SPEC 기준으로 다음 구조로 확장할 예정입니다.
-
-```text
-benchmark/
-  cli.py
-  config.py
-  openai_client.py
-  workloads.py
-  metrics.py
-  resources.py
-  reporting.py
-  datasets/
-  scoring/
-  schemas.py
-tests/
-```
-
-
-## Codex CLI 연동
-
-이 리포지토리는 주요 구현을 코딩 전문 에이전트에게 위임하는 방식으로 진행합니다. 현재 Codex CLI 연동 파일은 다음과 같습니다.
-
-- `AGENTS.md`: Codex/Claude Code 같은 코딩 에이전트가 따라야 할 repository instructions
-- `docs/plans/phase-1-performance-harness.md`: Phase 1 구현 계획
-- `scripts/codex_phase1.sh`: Codex CLI로 Phase 1 구현을 시작하는 스크립트
-
-Codex CLI 실행 전 인증이 필요합니다.
-
-```bash
-# API key를 사용할 경우
-export OPENAI_API_KEY=...
-printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
-
-# 또는 device auth
-codex login --device-auth
-```
-
-Phase 1 구현 시작:
-
-```bash
-./scripts/codex_phase1.sh
-```
-
-주의: 이 스크립트는 실제 코드를 수정하는 코딩 에이전트를 실행합니다. 실행 전 `SPEC.md`와 `docs/plans/phase-1-performance-harness.md`를 검토하세요.
-
-## 빠른 시작, 현재 scaffold 기준
-
-현재 코드는 초기 scaffold입니다. SPEC의 모든 요구사항이 아직 구현된 상태는 아닙니다.
+## 설치
 
 ```bash
 python3 -m venv .venv
@@ -231,7 +35,15 @@ python3 -m venv .venv
 pip install -e .
 ```
 
-OpenAI-compatible server가 떠 있다고 가정하고 smoke benchmark를 실행합니다.
+설치 후 `llm-bench` 명령을 사용할 수 있습니다.
+
+```bash
+llm-bench --help
+```
+
+## 빠른 실행
+
+OpenAI-compatible server가 이미 떠 있다고 가정합니다.
 
 ```bash
 llm-bench \
@@ -239,12 +51,19 @@ llm-bench \
   --model local_model \
   --prompts prompts/smoke.jsonl \
   --concurrency 1,10,100 \
+  --requests 100 \
+  --warmup 10 \
   --max-tokens 128 \
+  --temperature 0 \
   --out results/smoke.jsonl \
   --summary results/smoke-summary.csv
 ```
 
-## 서버 실행 템플릿
+현재 scaffold는 raw JSONL과 summary CSV를 생성합니다. 향후 Phase 1 완료 시 summary JSON, 더 명확한 schema, goodput, failure category, resource metric이 확장됩니다.
+
+## 서버 실행 예시
+
+서버 실행 스크립트는 템플릿입니다. 실제 환경에 맞게 모델 경로, 포트, dtype, quantization, tensor parallel 설정을 조정해야 합니다.
 
 ```bash
 bash servers/sglang.sh Qwen/Qwen2.5-7B-Instruct 8000
@@ -252,60 +71,68 @@ bash servers/vllm.sh Qwen/Qwen2.5-7B-Instruct 8001
 bash servers/llama_cpp.sh /path/to/model.gguf 8002
 ```
 
-실제 비교에서는 각 실행 명령, framework version, CUDA/driver, model revision, quantization, tokenizer revision을 반드시 결과 metadata에 기록해야 합니다.
+벤치마크 결과를 비교할 때는 서버 실행 명령, framework version, CUDA/driver, model revision, tokenizer revision, dtype, quantization 설정을 함께 기록해야 합니다.
 
-## DGX / GB10 환경 메모
+## 입력 프롬프트
 
-초기 대상 서버 환경:
+프롬프트 파일은 JSONL 형식입니다. 각 줄은 하나의 요청 입력입니다.
 
-- Ubuntu 24.04 aarch64
-- NVIDIA GB10 / SM121
-- CUDA 13.0
-- 121GiB RAM
+`prompt` 필드를 사용할 수 있습니다.
 
-주의:
+```json
+{"id":"hello","prompt":"Explain what an LLM serving benchmark measures."}
+```
 
-- PyTorch, SGLang, vLLM prebuilt wheel이 SM121 compatible kernel을 포함하지 않을 수 있습니다.
-- 설치 가능 여부와 kernel compatibility도 벤치마크 과정에서 중요한 관찰 항목입니다.
-- 단순히 “설치 실패”로 제외하지 말고 실패 조건과 로그를 기록해야 합니다.
+또는 OpenAI chat 형식의 `messages` 필드를 사용할 수 있습니다.
 
-## 결과물 목표
+```json
+{"id":"chat-1","messages":[{"role":"user","content":"Write a short summary of GPU batching."}]}
+```
 
-각 실험은 다음 산출물을 만들어야 합니다.
+현재 smoke 예시는 `prompts/smoke.jsonl`에 있습니다.
 
-- raw per-request JSONL
-- summary CSV/JSON
-- resource usage log
-- benchmark metadata
-- quality benchmark score
-- Markdown report
-- reproduction command
+## 주요 지표
 
-## 초기 개발 계획
+이 프로젝트가 최종적으로 중요하게 보는 지표는 다음과 같습니다.
 
-1. SPEC 확정
-2. README 정리
-3. 코딩 전문 에이전트에게 Phase 1 구현 위임
-4. 성능 harness 구현
-5. concurrency 1/10/100 smoke run
-6. P0 품질 벤치마크 일부 구현
-7. DGX에서 SGLang/vLLM/llama.cpp 순서로 검증
-8. 결과 리포트 생성
+- request throughput
+- output token throughput
+- total token throughput
+- TTFT, Time To First Token
+- TPOT, Time Per Output Token
+- end-to-end latency p50/p90/p95/p99
+- goodput under SLO
+- failure rate and timeout rate
+- GPU/CPU/RAM resource usage
+- cost-like efficiency metrics
+- quality/correctness regression score
 
-## 라이선스와 데이터셋 주의사항
+초기 Phase 1은 성능 harness에 집중합니다. 품질 벤치마크는 Phase 1 성능 harness가 정리된 뒤 추가됩니다.
 
-공개 데이터셋은 각 원본 라이선스를 확인해야 합니다.
+## 결과 파일
 
-가능하면 초기에는:
+벤치마크 실행 결과는 기본적으로 `results/` 아래에 저장합니다.
 
-- 데이터셋을 repo에 직접 포함하지 않기
-- 다운로드 스크립트 또는 dataset loader 사용
-- subset manifest와 hash만 저장
-- license가 명확한 synthetic dataset은 repo에 포함 가능
+- raw JSONL: 요청별 latency, token count, 성공/실패 정보
+- summary CSV/JSON: concurrency 또는 workload별 집계 지표
+- report: 환경, 설정, 주요 결과, 재현 명령을 담은 Markdown 문서
 
-## 현재 상태
+`results/`에 생성되는 실제 벤치마크 결과 파일은 일반적으로 git에 커밋하지 않습니다.
 
-이 리포지토리는 초기 설계 및 scaffold 단계입니다.
+## 비교 대상
 
-가장 중요한 문서는 `SPEC.md`입니다.
-구현은 이 문서를 기준으로 코딩 전문 에이전트에게 위임하는 방식으로 진행합니다.
+초기 대상은 다음 OpenAI-compatible serving framework입니다.
+
+- vLLM
+- SGLang
+- llama.cpp / llama-server
+
+이후 필요에 따라 TensorRT-LLM, Hugging Face TGI, LMDeploy, Ollama 등을 추가할 수 있습니다.
+
+## 주의사항
+
+서버와 클라이언트를 같은 머신에서 실행하면 client overhead와 resource measurement가 결과에 영향을 줄 수 있습니다.
+
+프레임워크별 기본값은 서로 다를 수 있으므로, decoding parameter, max context length, batching 관련 설정, quantization, dtype을 반드시 함께 기록해야 합니다.
+
+공개 데이터셋을 사용하는 품질 벤치마크는 원본 라이선스를 확인해야 합니다. 데이터셋 원문을 저장소에 직접 포함하기보다 runtime downloader, subset manifest, hash를 사용하는 방식을 선호합니다.
