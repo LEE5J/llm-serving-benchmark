@@ -46,4 +46,17 @@ When done, summarize:
 PROMPT_EOF
 )
 
-codex exec --full-auto "$PROMPT"
+# Default to a safe sandbox: Codex can edit this workspace, but should ask before
+# risky actions. Override CODEX_MODEL if you want to force a specific Pro model.
+if [[ -n "${CODEX_MODEL:-}" ]]; then
+  codex exec \
+    --model "$CODEX_MODEL" \
+    --sandbox workspace-write \
+    --ask-for-approval on-request \
+    "$PROMPT"
+else
+  codex exec \
+    --sandbox workspace-write \
+    --ask-for-approval on-request \
+    "$PROMPT"
+fi
