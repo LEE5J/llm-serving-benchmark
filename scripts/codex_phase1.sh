@@ -46,17 +46,24 @@ When done, summarize:
 PROMPT_EOF
 )
 
-# Default to a safe sandbox: Codex can edit this workspace, but should ask before
-# risky actions. Override CODEX_MODEL if you want to force a specific Pro model.
+# Use ~/.codex/config.toml by default. This lets the user control Pro model,
+# sandbox mode, approval policy, and network access directly from Codex config.
+# Optional overrides:
+#   CODEX_MODEL=<model-id> ./scripts/codex_phase1.sh
+#   CODEX_SANDBOX=workspace-write ./scripts/codex_phase1.sh
+#   CODEX_APPROVAL=on-request ./scripts/codex_phase1.sh
+ARGS=(exec)
 if [[ -n "${CODEX_MODEL:-}" ]]; then
-  codex exec \
-    --model "$CODEX_MODEL" \
-    --sandbox workspace-write \
-    --ask-for-approval on-request \
-    "$PROMPT"
-else
-  codex exec \
-    --sandbox workspace-write \
-    --ask-for-approval on-request \
-    "$PROMPT"
+  ARGS+=(--model "$CODEX_MODEL")
 fi
+if [[ -n "${CODEX_SANDBOX:-}" ]]; then
+  ARGS+=(--sandbox "$CODEX_SANDBOX")
+fi
+if [[ -n "${CODEX_APPROVAL:-}" ]]; then
+  # codex exec does not expose --ask-for-approval in this CLI version;
+  # use the config override mechanism instead.
+  ARGS+=(-c "approval_policy=\"$CODEX_APPROVAL\"")
+fi
+ARGS+=("$PROMPT")
+
+codex "${ARGS[@]}"
