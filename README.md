@@ -193,6 +193,34 @@ benchmark/
 tests/
 ```
 
+
+## Codex CLI 연동
+
+이 리포지토리는 주요 구현을 코딩 전문 에이전트에게 위임하는 방식으로 진행합니다. 현재 Codex CLI 연동 파일은 다음과 같습니다.
+
+- `AGENTS.md`: Codex/Claude Code 같은 코딩 에이전트가 따라야 할 repository instructions
+- `docs/plans/phase-1-performance-harness.md`: Phase 1 구현 계획
+- `scripts/codex_phase1.sh`: Codex CLI로 Phase 1 구현을 시작하는 스크립트
+
+Codex CLI 실행 전 인증이 필요합니다.
+
+```bash
+# API key를 사용할 경우
+export OPENAI_API_KEY=...
+printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
+
+# 또는 device auth
+codex login --device-auth
+```
+
+Phase 1 구현 시작:
+
+```bash
+./scripts/codex_phase1.sh
+```
+
+주의: 이 스크립트는 실제 코드를 수정하는 코딩 에이전트를 실행합니다. 실행 전 `SPEC.md`와 `docs/plans/phase-1-performance-harness.md`를 검토하세요.
+
 ## 빠른 시작, 현재 scaffold 기준
 
 현재 코드는 초기 scaffold입니다. SPEC의 모든 요구사항이 아직 구현된 상태는 아닙니다.
