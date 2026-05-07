@@ -58,9 +58,9 @@ python -m compileall benchmark
 - Do not force-push `main`.
 - Include verification results in the final agent response.
 
-## First implementation target
+## Current implementation target
 
-The first coding task should be Phase 1 from `SPEC.md`:
+The current coding task should implement the performance harness described in `SPEC.md`:
 
 - Refactor the current OpenAI-compatible benchmark harness into small modules.
 - Support closed-loop concurrency 1, 10, and 100.
@@ -68,4 +68,4 @@ The first coding task should be Phase 1 from `SPEC.md`:
 - Produce raw JSONL and summary CSV/JSON.
 - Add tests for metric calculations and schema behavior.
 
-Do not start P0 quality benchmark implementation until the Phase 1 performance harness is reviewed.
+Do not start quality benchmark implementation until the current performance harness is reviewed.

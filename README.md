@@ -1,8 +1,8 @@
 # LLM Serving Benchmark
 
-LLM Serving Benchmark는 vLLM, SGLang, llama.cpp 같은 LLM 서빙 프레임워크를 같은 조건에서 비교하기 위한 벤치마크 도구입니다.
+LLM Serving Benchmark는 vLLM, SGLang, llama.cpp 같은 LLM 서빙 프레임워크를 사용자의 하드웨어와 실행 환경에서 비교하기 위한 벤치마크 도구입니다.
 
-이 프로젝트의 목적은 특정 프레임워크가 좋아 보이는 단일 숫자를 만드는 것이 아닙니다. 같은 모델, 같은 요청 형식, 같은 측정 기준을 사용하면서도 실제 서비스에서 문제가 되는 지점을 함께 확인하는 것이 목적입니다.
+이 프로젝트의 목적은 특정 프레임워크가 좋아 보이는 단일 숫자를 만드는 것이 아닙니다. 같은 모델, 같은 요청 형식, 같은 측정 기준을 사용하되, 하드웨어와 실행 환경은 결과 해석에 필요한 메타데이터로 남기는 것이 목적입니다.
 
 - 첫 토큰이 얼마나 빨리 나오는가
 - 동시 요청이 늘어날 때 p95/p99 latency가 어떻게 변하는가
@@ -23,7 +23,7 @@ LLM serving 성능은 하나의 `tokens/sec` 값으로 설명되지 않습니다
 
 현재 리포지토리는 초기 scaffold 단계입니다.
 
-구현 계약은 `SPEC.md`에 정의되어 있으며, 설계 의도와 모듈 분리 근거는 `architect.md`에 정리되어 있습니다. README는 사용자 관점에서 목적과 실행 방법만 설명합니다.
+구현 계약은 `SPEC.md`에 정의되어 있으며, 계획 과정의 의도와 설계 판단은 `PLANNING.md`에 정리되어 있습니다. README는 사용자 관점에서 목적과 실행 방법만 설명합니다.
 
 현재 제공되는 코드는 OpenAI-compatible `/chat/completions` 서버에 요청을 보내는 초기 벤치마크 harness입니다. `SPEC.md`의 모든 요구사항이 아직 구현된 상태는 아닙니다.
 
@@ -59,7 +59,7 @@ llm-bench \
   --summary results/smoke-summary.csv
 ```
 
-현재 scaffold는 raw JSONL과 summary CSV를 생성합니다. 향후 Phase 1 완료 시 summary JSON, 더 명확한 schema, goodput, failure category, resource metric이 확장됩니다.
+현재 scaffold는 raw JSONL과 summary CSV를 생성합니다. 향후 현재 구현 범위가 완료되면 summary JSON, 더 명확한 schema, goodput, failure category, resource metric이 확장됩니다.
 
 ## 서버 실행 예시
 
@@ -71,7 +71,7 @@ bash servers/vllm.sh Qwen/Qwen2.5-7B-Instruct 8001
 bash servers/llama_cpp.sh /path/to/model.gguf 8002
 ```
 
-벤치마크 결과를 비교할 때는 서버 실행 명령, framework version, CUDA/driver, model revision, tokenizer revision, dtype, quantization 설정을 함께 기록해야 합니다.
+벤치마크 결과를 비교할 때는 서버 실행 명령, framework version, 하드웨어, CUDA/driver, model revision, tokenizer revision, dtype, quantization 설정을 함께 기록해야 합니다.
 
 ## 입력 프롬프트
 
@@ -107,7 +107,7 @@ bash servers/llama_cpp.sh /path/to/model.gguf 8002
 - cost-like efficiency metrics
 - quality/correctness regression score
 
-초기 Phase 1은 성능 harness에 집중합니다. 품질 벤치마크는 Phase 1 성능 harness가 정리된 뒤 추가됩니다.
+현재 구현 범위는 성능 harness에 집중합니다. 품질 벤치마크는 성능 harness가 정리된 뒤 추가됩니다.
 
 ## 결과 파일
 
